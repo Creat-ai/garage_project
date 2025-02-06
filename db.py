@@ -36,23 +36,19 @@ class Database:
         """, (vin, catalog, name, ssd, brand))
         self.connection.commit()
 
-    def add_car_to_garage(self, user_id, car_id):
-        """Связь автомобиля с пользователем (гараж)"""
-        self.cursor.execute("""
-            INSERT INTO user_garage (user_id, car_id)
-            VALUES (?, ?)
-        """, (user_id, car_id))
-        self.connection.commit()
-
     def get_cars_by_user(self, user_id):
-        """Получение всех автомобилей пользователя"""
-        self.cursor.execute("""
-            SELECT cars.car_id, cars.vin, cars.name, cars.brand
-            FROM cars
-            INNER JOIN user_garage ON cars.car_id = user_garage.car_id
-            WHERE user_garage.user_id = ?
-        """, (user_id,))
-        return self.cursor.fetchall()
+        """Получение всех автомобилей пользователя."""
+        try:
+            self.cursor.execute("""
+                SELECT cars.car_id, cars.vin, cars.name, cars.brand, cars.catalog, cars.ssd
+                FROM cars
+                INNER JOIN user_garage ON cars.car_id = user_garage.car_id
+                WHERE user_garage.user_id = ?
+            """, (user_id,))
+            return self.cursor.fetchall()
+        except Exception as e:
+            logging.error(f"[get_cars_by_user] Ошибка в запросе: {e}")
+            return []
 
     def get_car_by_vin(self, vin, user_id):
         """Поиск автомобиля по VIN и пользователю"""
@@ -109,17 +105,29 @@ class Database:
             }
         return None
 
-    # === Новые методы ===
+    def get_vehicle_by_part_number(self, part_number: str):
+        """
+        Поиск автомобиля в базе данных по гос. номеру (part_number).
+        """
+        try:
+            query = "SELECT * FROM cars WHERE part_number = ?"
+            self.cursor.execute(query, (part_number,))
+            row = self.cursor.fetchone()
 
-    def find_vehicle_in_garage(self, user_id, vin):
-        """Поиск автомобиля по VIN в гараже пользователя"""
-        self.cursor.execute("""
-            SELECT cars.car_id, cars.vin, cars.name, cars.brand
-            FROM cars
-            INNER JOIN user_garage ON cars.car_id = user_garage.car_id
-            WHERE cars.vin = ? AND user_garage.user_id = ?
-        """, (vin, user_id))
-        return self.cursor.fetchone()
+            # Отладка результата
+            if not row:
+                logging.warning(f"Автомобиль с гос. номером {part_number} не найден в базе данных.")
+                return None
+
+            # Преобразование записи в словарь
+            columns = [desc[0] for desc in self.cursor.description]
+            result = dict(zip(columns, row))
+
+            logging.debug(f"Найден автомобиль: {result}")
+            return result
+        except Exception as e:
+            logging.error(f"[get_vehicle_by_part_number] Ошибка выполнения запроса: {e}")
+            return None
 
     def find_vehicle_in_database(self, vin):
         """Поиск автомобиля по VIN в общей базе данных"""
@@ -129,44 +137,95 @@ class Database:
         """, (vin,))
         return self.cursor.fetchone()
 
-    def add_vehicle_to_garage(self, user_id, car_id):
-        logging.debug(f"Добавляем в гараж: user_id={user_id}, car_id={car_id}")
-        try:
-            self.cursor.execute("""
-                INSERT INTO user_garage (user_id, car_id)
-                VALUES (?, ?)
-                ON CONFLICT(user_id, car_id) DO NOTHING -- Предотвращение дублирования
-            """, (user_id, car_id))
-            self.connection.commit()
-            logging.debug("Успешно добавлено в гараж")
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка добавления автомобиля в гараж: {e}")
-
-    def add_vehicle_to_database(self, vin, brand, model, catalog=None, ssd=None):
+    def add_vehicle_to_database(self, vehicleid, vin, brand, name=None, catalog=None, ssd=None, part_number=None):
         """
-        Добавление автомобиля в таблицу cars. Если автомобиль уже существует (по VIN), то не добавляется.
+        Добавляет автомобиль в таблицу cars.
+        """
+        query = """
+            INSERT INTO cars (vehicleid, vin, brand, name, catalog, ssd, part_number)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """
         try:
-            self.cursor.execute("""
-                INSERT INTO cars (vin, name, brand, catalog, ssd)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(vin) DO NOTHING -- Предотвращение дублирования по VIN
-            """, (vin, f"{brand} {model}", brand, catalog, ssd))
+            self.cursor.execute(query, (vehicleid, vin, brand, name, catalog, ssd, part_number))
             self.connection.commit()
-
-            # Получаем ID добавленного автомобиля (или уже существующего)
-            car_id = self.cursor.execute("SELECT car_id FROM cars WHERE vin = ?", (vin,)).fetchone()
-            if car_id:
-                return car_id[0]
+            return self.cursor.lastrowid  # Возвращаем ID последней добавленной записи
+        except sqlite3.IntegrityError:
+            logging.error(f"Автомобиль с vehicleid={vehicleid} или VIN={vin} уже существует.")
             return None
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка при добавлении автомобиля в базу данных: {e}")
+        except Exception as e:
+            logging.error(f"Ошибка при добавлении автомобиля: {e}")
+            self.connection.rollback()
             return None
 
-    def is_car_in_garage(self, user_id, car_id):
-        """Проверка: есть ли автомобиль в гараже пользователя"""
-        result = self.cursor.execute("""
-            SELECT 1 FROM user_garage WHERE user_id = ? AND car_id = ?
-        """, (user_id, car_id)).fetchone()
-        return result is not None
+
+    def add_part_to_database(self, vin: str, oem: str, name: str):
+        """
+        Сохранение информации о запчастях в локальной базе данных.
+        """
+        try:
+            query = """
+            INSERT OR IGNORE INTO parts (vin, oem, name)
+            VALUES (?, ?, ?)
+            """
+            self.cursor.execute(query, (vin, oem, name))
+            self.connection.commit()
+            logging.info(f"Запчасть {name} (OEM: {oem}) для VIN {vin} успешно добавлена в базу.")
+        except Exception as e:
+            logging.error(f"Ошибка при добавлении запчасти в базу данных: {e}")
+
+    # Поиск запчастей по VIN и названию
+
+    def search_local_parts(self, car_id: int, part_name: str) -> list:
+        """
+        Осуществляет поиск запчастей в локальной базе данных по ID автомобиля и названию/части названия детали.
+        """
+        try:
+            # SQL-запрос с приведением регистра к нижнему
+            query = """
+                SELECT id, name, oem 
+                FROM parts
+                WHERE car_id = ? 
+                AND (LOWER(name) LIKE LOWER(?) OR LOWER(oem) LIKE LOWER(?))
+            """
+            # Приводим часть названия к нижнему регистру
+            search_query = f"%{part_name.strip().lower()}%"
+            self.cursor.execute(query, (car_id, search_query, search_query))
+            results = self.cursor.fetchall()
+            if not results:
+                logging.info(f"Нет совпадений для car_id={car_id} и part_name={part_name}.")
+            return results
+        except Exception as e:
+            logging.error(f"Ошибка при поиске запчастей в базе: {e}")
+            return []
+
+    def save_parts_to_db(self, car_id: int, parts: list):
+        """
+        Сохраняет запчасти в базу данных с преобразованием регистра к нижнему.
+        """
+        try:
+            for part in parts:
+                oem = part.get("oem", "").strip().lower()  # Приводим к нижнему регистру
+                name = part.get("name", "Неизвестно").strip().lower()  # Приводим к нижнему регистру
+
+                # Пропуск, если данные уже существуют
+                existing_query = """
+                    SELECT 1 FROM parts WHERE car_id = ? AND LOWER(name) = LOWER(?) AND LOWER(oem) = LOWER(?)
+                """
+                self.cursor.execute(existing_query, (car_id, name, oem))
+                if self.cursor.fetchone():
+                    logging.info(f"Запчасть {name} (OEM: {oem}) уже существует в базе. Пропуск.")
+                    continue
+
+                # Вставка новой запчасти
+                insert_query = """
+                    INSERT INTO parts (car_id, name, oem) VALUES (?, ?, ?)
+                """
+                self.cursor.execute(insert_query, (car_id, name, oem))
+                logging.info(f"Добавлена запчасть: {name} (OEM: {oem})")
+
+            self.connection.commit()
+        except Exception as e:
+            logging.error(f"Ошибка при сохранении запчастей в базу данных: {e}")
+
+
 
