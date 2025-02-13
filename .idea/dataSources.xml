@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+<<<<<<< HEAD
     <data-source source="LOCAL" name="bot_database" uuid="a2a37328-6646-4360-b31a-7eb798185a59">
       <driver-ref>sqlite.xerial</driver-ref>
       <synchronize>true</synchronize>
       <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
       <jdbc-url>jdbc:sqlite:D:\PythonProject4\garage_project\bot_database.db</jdbc-url>
+=======
+    <data-source source="LOCAL" name="bot_database" uuid="298881df-7b51-46c0-aba9-2f9ba6a28a07">
+      <driver-ref>sqlite.xerial</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
+      <jdbc-url>jdbc:sqlite:D:\project\bot_database.db</jdbc-url>
+>>>>>>> e51aa202a3fd521901c847c9070e2af3158d2177
       <working-dir>$ProjectFileDir$</working-dir>
       <libraries>
         <library>
